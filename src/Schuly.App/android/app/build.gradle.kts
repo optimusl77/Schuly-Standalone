@@ -46,12 +46,12 @@ android {
             dimension = "environment"
             applicationIdSuffix = ".dev"
             versionNameSuffix = "-DEV"
-            resValue("string", "app_name", "Schuly DEV")
+            resValue("string", "app_name", "Schuly Standalone DEV")
             // Don't modify versionCode for dev builds
         }
         create("prod") {
             dimension = "environment"
-            resValue("string", "app_name", "Schuly")
+            resValue("string", "app_name", "Schuly Standalone")
         }
     }
 
