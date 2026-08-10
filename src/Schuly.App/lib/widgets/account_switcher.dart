@@ -468,12 +468,9 @@ class _AccountSwitcherState extends State<AccountSwitcher> {
   }
 
   void _showAddAccountDialog(BuildContext context, ApiStore apiStore) {
-    final localizations = AppLocalizations.of(context)!;
-    final emailController = TextEditingController();
-    final passwordController = TextEditingController();
+    final schulnetzUrlController = TextEditingController(text: apiBaseUrl);
     final formKey = GlobalKey<FormState>();
     bool isLoading = false;
-    bool showPassword = false;
 
     showDialog(
       context: context,
@@ -481,203 +478,103 @@ class _AccountSwitcherState extends State<AccountSwitcher> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setState) {
-            void setLoading(bool loading) {
-              isLoading = loading;
+            Future<void> signIn() async {
+              if (!formKey.currentState!.validate()) return;
+              setState(() => isLoading = true);
+
+              final result = await Navigator.of(context).push<bool>(
+                MaterialPageRoute(
+                  builder: (ctx) => MicrosoftAuthPage(
+                    apiBaseUrl: schulnetzUrlController.text.trim(),
+                    existingUserEmail: null, // New account
+                    onAuthSuccess: (token, refreshToken, email) async {
+                      await apiStore.addMicrosoftUser(token, refreshToken);
+                      await apiStore.fetchAll();
+                    },
+                  ),
+                ),
+              );
+
+              if (!context.mounted) return;
+              if (result == true) {
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(AppLocalizations.of(context)!.accountAdded),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } else {
+                setState(() => isLoading = false);
+              }
             }
-            
+
             return PopScope(
               canPop: !isLoading,
               child: AlertDialog(
                 title: Row(
-                children: [
-                  Icon(Icons.person_add, 
-                      color: Theme.of(context).colorScheme.primary),
-                  const SizedBox(width: 8),
-                  Text(AppLocalizations.of(context)!.addAccount),
-                ],
-              ),
-              content: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    TextFormField(
-                      controller: emailController,
-                      decoration: InputDecoration(
-                        labelText: AppLocalizations.of(context)!.emailAddress,
-                        prefixIcon: const Icon(Icons.email_outlined),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      validator: (v) {
-                        if (v == null || v.isEmpty) {
-                          return AppLocalizations.of(context)!.enterEmailAddress;
-                        }
-                        if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(v)) {
-                          return AppLocalizations.of(context)!.enterValidEmail;
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: passwordController,
-                      decoration: InputDecoration(
-                        labelText: AppLocalizations.of(context)!.password,
-                        prefixIcon: const Icon(Icons.lock_outlined),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        suffixIcon: IconButton(
-                          icon: Icon(showPassword ? Icons.visibility_off : Icons.visibility),
-                          onPressed: () => setState(() => showPassword = !showPassword),
-                        ),
-                      ),
-                      obscureText: !showPassword,
-                      textInputAction: TextInputAction.done,
-                      validator: (v) => v == null || v.isEmpty ? AppLocalizations.of(context)!.enterPassword : null,
-                      onFieldSubmitted: (_) {
-                        if (!isLoading && formKey.currentState!.validate()) {
-                          _addAccount(setState, apiStore, emailController.text.trim(), passwordController.text, formKey, setLoading);
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        const Expanded(child: Divider()),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                          child: Text(localizations.or),
-                        ),
-                        const Expanded(child: Divider()),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: isLoading ? null : () async {
-                          // Navigate to Microsoft auth page
-                          if (context.mounted) {
-                            final result = await Navigator.of(context).push<bool>(
-                              MaterialPageRoute(
-                                builder: (ctx) => MicrosoftAuthPage(
-                                  apiBaseUrl: apiBaseUrl,
-                                  existingUserEmail: null, // New account
-                                  onAuthSuccess: (token, refreshToken, email) async {
-                                    // Add the Microsoft user with tokens
-                                    await apiStore.addMicrosoftUser(token, refreshToken);
-
-                                    // Fetch user data
-                                    await apiStore.fetchAll();
-                                  },
-                                ),
-                              ),
-                            );
-
-                            if (result == true && context.mounted) {
-                              Navigator.of(context).pop();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(AppLocalizations.of(context)!.accountAdded),
-                                  backgroundColor: Colors.green,
-                                ),
-                              );
-                            }
-                          }
-                        },
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
+                    Icon(Icons.person_add,
+                        color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Text(AppLocalizations.of(context)!.addAccount),
+                  ],
+                ),
+                content: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: schulnetzUrlController,
+                        decoration: InputDecoration(
+                          labelText: 'Schulnetz-URL',
+                          hintText: 'https://schulnetz.beispielschule.ch',
+                          prefixIcon: const Icon(Icons.school_outlined),
+                          border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
                         ),
-                        icon: Image.network(
-                          'https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg',
-                          width: 20,
-                          height: 20,
-                          errorBuilder: (context, error, stackTrace) => const Icon(Icons.business, size: 20),
-                        ),
-                        label: Text(localizations.signInWithMicrosoft),
+                        keyboardType: TextInputType.url,
+                        textInputAction: TextInputAction.done,
+                        validator: (v) => v == null || v.trim().isEmpty
+                            ? 'Bitte Schulnetz-URL eingeben'
+                            : null,
+                        onFieldSubmitted: (_) {
+                          if (!isLoading) signIn();
+                        },
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isLoading ? null : () => Navigator.of(context).pop(),
-                  child: Text(AppLocalizations.of(context)!.cancel),
-                ),
-                FilledButton(
-                  onPressed: isLoading
-                      ? null
-                      : () => _addAccount(setState, apiStore, emailController.text.trim(), passwordController.text, formKey, setLoading),
-                  child: isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Text(AppLocalizations.of(context)!.add),
-                ),
-              ],
+                actions: [
+                  TextButton(
+                    onPressed: isLoading ? null : () => Navigator.of(context).pop(),
+                    child: Text(AppLocalizations.of(context)!.cancel),
+                  ),
+                  FilledButton.icon(
+                    onPressed: isLoading ? null : signIn,
+                    icon: isLoading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Image.network(
+                            'https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg',
+                            width: 20,
+                            height: 20,
+                            errorBuilder: (context, error, stackTrace) =>
+                                const Icon(Icons.business, size: 20),
+                          ),
+                    label: Text(AppLocalizations.of(context)!.signInWithMicrosoft),
+                  ),
+                ],
               ),
             );
           },
         );
       },
     );
-  }
-
-  Future<void> _addAccount(StateSetter setState, ApiStore apiStore, String email, String password, GlobalKey<FormState> formKey, void Function(bool) setLoading) async {
-    if (!formKey.currentState!.validate()) return;
-
-    setLoading(true);
-    setState(() {});
-
-    try {
-      final result = await apiStore.addUser(email, password);
-
-      if (mounted) {
-        if (result == null) {
-          Navigator.of(context).pop(); // Close add account dialog
-          Navigator.of(context).pop(); // Close account switcher
-          
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(AppLocalizations.of(context)!.accountAdded),
-              backgroundColor: Colors.green,
-            ),
-          );
-        } else {
-          setLoading(false);
-          setState(() {});
-          
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(result),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setLoading(false);
-        setState(() {});
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(AppLocalizations.of(context)!.unexpectedError(e.toString())),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
   }
 }

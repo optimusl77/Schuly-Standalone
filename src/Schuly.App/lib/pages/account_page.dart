@@ -335,46 +335,27 @@ class _AccountPageState extends State<AccountPage> {
                         final email = apiStore.activeUserEmail;
                         final user = apiStore.activeUser;
                         if (email != null && user != null) {
-                          // Check if this is a Microsoft-authenticated user
-                          if (user['is_microsoft_auth'] == true) {
-                            // Re-authenticate with Microsoft using the fixed cookie storage
-                            final result = await Navigator.of(context).push<bool>(
-                              MaterialPageRoute(
-                                builder: (ctx) => MicrosoftAuthPage(
-                                  apiBaseUrl: apiBaseUrl,
-                                  existingUserEmail: email, // This will restore cookies
-                                  onAuthSuccess: (token, refreshToken, userEmail) async {
-                                    // Update the user's tokens
-                                    await apiStore.addMicrosoftUser(token, refreshToken, email);
-                                    await apiStore.fetchAll();
-                                  },
-                                ),
+                          // Re-authenticate with Microsoft using the fixed cookie storage
+                          final result = await Navigator.of(context).push<bool>(
+                            MaterialPageRoute(
+                              builder: (ctx) => MicrosoftAuthPage(
+                                apiBaseUrl: apiBaseUrl,
+                                existingUserEmail: email, // This will restore cookies
+                                onAuthSuccess: (token, refreshToken, userEmail) async {
+                                  // Update the user's tokens
+                                  await apiStore.addMicrosoftUser(token, refreshToken, email);
+                                  await apiStore.fetchAll();
+                                },
+                              ),
+                            ),
+                          );
+                          if (result == true && context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(localizations.tokenUpdated),
+                                backgroundColor: Colors.green,
                               ),
                             );
-                            if (result == true && context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(localizations.tokenUpdated),
-                                  backgroundColor: Colors.green,
-                                ),
-                              );
-                            }
-                          } else {
-                            // Traditional email/password re-authentication
-                            final ok = await apiStore.addUser(
-                              email,
-                              user['password'],
-                            );
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(ok ?? localizations.tokenUpdated),
-                                  backgroundColor: ok == null
-                                      ? Colors.green
-                                      : Colors.red,
-                                ),
-                              );
-                            }
                           }
                         } else {
                           if (context.mounted) {
@@ -573,11 +554,9 @@ class _AccountPageState extends State<AccountPage> {
   }
 
   void _showAddAccountDialog(BuildContext context, ApiStore apiStore) {
-    final emailController = TextEditingController();
-    final passwordController = TextEditingController();
+    final schulnetzUrlController = TextEditingController(text: apiBaseUrl);
     final formKey = GlobalKey<FormState>();
     bool isLoading = false;
-    bool showPassword = false;
     showDialog(
       context: context,
       barrierDismissible: !isLoading,
@@ -585,6 +564,38 @@ class _AccountPageState extends State<AccountPage> {
         return StatefulBuilder(
           builder: (context, setState) {
             final localizations = AppLocalizations.of(context)!;
+
+            Future<void> signIn() async {
+              if (!formKey.currentState!.validate()) return;
+              setState(() => isLoading = true);
+
+              final result = await Navigator.of(context).push<bool>(
+                MaterialPageRoute(
+                  builder: (ctx) => MicrosoftAuthPage(
+                    apiBaseUrl: schulnetzUrlController.text.trim(),
+                    existingUserEmail: null, // New account
+                    onAuthSuccess: (token, refreshToken, email) async {
+                      await apiStore.addMicrosoftUser(token, refreshToken);
+                      await apiStore.fetchAll();
+                    },
+                  ),
+                ),
+              );
+
+              if (!context.mounted) return;
+              if (result == true) {
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(localizations.accountAdded),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } else {
+                setState(() => isLoading = false);
+              }
+            }
+
             return PopScope(
               canPop: !isLoading,
               child: AlertDialog(
@@ -595,87 +606,18 @@ class _AccountPageState extends State<AccountPage> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       TextFormField(
-                        controller: emailController,
-                        decoration: InputDecoration(
-                          labelText: localizations.emailLabel,
+                        controller: schulnetzUrlController,
+                        decoration: const InputDecoration(
+                          labelText: 'Schulnetz-URL',
+                          hintText: 'https://schulnetz.beispielschule.ch',
                         ),
-                        validator: (v) => v == null || v.isEmpty
-                            ? localizations.enterEmail
+                        keyboardType: TextInputType.url,
+                        validator: (v) => v == null || v.trim().isEmpty
+                            ? 'Bitte Schulnetz-URL eingeben'
                             : null,
-                      ),
-                      TextFormField(
-                        controller: passwordController,
-                        decoration: InputDecoration(
-                          labelText: localizations.passwordLabel,
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              showPassword
-                                  ? Icons.visibility
-                                  : Icons.visibility_off,
-                            ),
-                            onPressed: () =>
-                                setState(() => showPassword = !showPassword),
-                          ),
-                        ),
-                        obscureText: !showPassword,
-                        validator: (v) => v == null || v.isEmpty
-                            ? localizations.enterPassword
-                            : null,
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          const Expanded(child: Divider()),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                            child: Text(localizations.or),
-                          ),
-                          const Expanded(child: Divider()),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: isLoading ? null : () async {
-
-                            // Navigate to Microsoft auth page
-                            if (context.mounted) {
-                              final result = await Navigator.of(context).push<bool>(
-                                MaterialPageRoute(
-                                  builder: (ctx) => MicrosoftAuthPage(
-                                    apiBaseUrl: apiBaseUrl,
-                                    existingUserEmail: null, // New account
-                                    onAuthSuccess: (token, refreshToken, email) async {
-                                      // Add the Microsoft user with tokens
-                                      await apiStore.addMicrosoftUser(token, refreshToken);
-
-                                      // Fetch user data
-                                      await apiStore.fetchAll();
-                                    },
-                                  ),
-                                ),
-                              );
-
-                              if (result == true && context.mounted) {
-                                Navigator.of(context).pop();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(localizations.accountAdded),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-                              }
-                            }
-                          },
-                          icon: Image.network(
-                            'https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg',
-                            width: 20,
-                            height: 20,
-                            errorBuilder: (context, error, stackTrace) => const Icon(Icons.business, size: 20),
-                          ),
-                          label: Text(localizations.signInWithMicrosoft),
-                        ),
+                        onFieldSubmitted: (_) {
+                          if (!isLoading) signIn();
+                        },
                       ),
                     ],
                   ),
@@ -685,45 +627,22 @@ class _AccountPageState extends State<AccountPage> {
                     onPressed: () => Navigator.of(context).pop(),
                     child: Text(localizations.cancel),
                   ),
-                  ElevatedButton(
-                    onPressed: isLoading
-                        ? null
-                        : () async {
-                            if (!formKey.currentState!.validate()) return;
-                            setState(() => isLoading = true);
-                            final ok = await apiStore.addUser(
-                              emailController.text.trim(),
-                              passwordController.text,
-                            );
-                            setState(() => isLoading = false);
-                            if (ok == null) {
-                              if (context.mounted) {
-                                Navigator.of(context).pop();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(localizations.accountAdded),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-                              }
-                            } else {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(ok),
-                                    backgroundColor: Colors.red,
-                                  ),
-                                );
-                              }
-                            }
-                          },
-                    child: isLoading
+                  ElevatedButton.icon(
+                    onPressed: isLoading ? null : signIn,
+                    icon: isLoading
                         ? const SizedBox(
                             width: 20,
                             height: 20,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : Text(localizations.add),
+                        : Image.network(
+                            'https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg',
+                            width: 20,
+                            height: 20,
+                            errorBuilder: (context, error, stackTrace) =>
+                                const Icon(Icons.business, size: 20),
+                          ),
+                    label: Text(localizations.signInWithMicrosoft),
                   ),
                 ],
               ),

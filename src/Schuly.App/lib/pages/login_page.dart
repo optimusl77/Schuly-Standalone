@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../utils/logger.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import '../l10n/app_localizations.dart';
 import '../providers/api_store.dart';
 import '../main.dart';
 import 'microsoft_auth_page.dart';
 
+/// Login is Microsoft/Entra-via-Schulnetz only, talking directly to the
+/// school's own Schulnetz instance - no Schuly backend, no email+password
+/// path (that went through the now-defunct SchulwareAPI proxy).
 class LoginPage extends StatefulWidget {
   final void Function(String)? onApiBaseUrlChanged;
   final String? initialApiBaseUrl;
@@ -18,17 +20,14 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _apiBaseUrlController = TextEditingController();
+  final _schulnetzUrlController = TextEditingController();
   bool _isLoading = false;
-  bool _showPassword = false;
   String _appVersion = '';
 
   @override
   void initState() {
     super.initState();
-    _apiBaseUrlController.text = widget.initialApiBaseUrl ?? apiBaseUrl;
+    _schulnetzUrlController.text = widget.initialApiBaseUrl ?? apiBaseUrl;
     _loadAppVersion();
   }
 
@@ -45,52 +44,40 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  Future<void> _performLogin() async {
+  Future<void> _signInWithMicrosoft() async {
     if (_formKey.currentState == null || !_formKey.currentState!.validate()) return;
-    
+    logDebug('Microsoft sign-in button pressed', source: 'LoginPage');
+
+    final schulnetzUrl = _schulnetzUrlController.text.trim();
+    setApiBaseUrl(schulnetzUrl);
+    widget.onApiBaseUrlChanged?.call(schulnetzUrl);
+
     setState(() => _isLoading = true);
-    
-    try {
-      final apiStore = Provider.of<ApiStore>(context, listen: false);
-      
-      if (widget.onApiBaseUrlChanged != null) {
-        widget.onApiBaseUrlChanged!(_apiBaseUrlController.text.trim());
-      }
-      
-      final error = await apiStore.addUser(_emailController.text.trim(), _passwordController.text);
-      
-      if (mounted) {
-        if (error == null) {
-          await apiStore.fetchAll();
-          // Login successful - navigation is handled by main app
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(error),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(AppLocalizations.of(context)!.unexpectedError(e.toString())),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => MicrosoftAuthPage(
+          apiBaseUrl: schulnetzUrl,
+          existingUserEmail: null, // New account
+          onAuthSuccess: (token, refreshToken, email) async {
+            logDebug('Microsoft auth successful', source: 'LoginPage');
+
+            final apiStore = Provider.of<ApiStore>(context, listen: false);
+            await apiStore.addMicrosoftUser(token, refreshToken);
+            await apiStore.fetchAll();
+          },
+        ),
+      ),
+    );
+    if (mounted) setState(() => _isLoading = false);
+
+    if (result == true && mounted) {
+      logDebug('Microsoft authentication completed successfully', source: 'LoginPage');
+      // Authentication successful - navigation handled by main app
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final localizations = AppLocalizations.of(context)!;
     return Scaffold(
       body: Stack(
         children: [
@@ -108,166 +95,66 @@ class _LoginPageState extends State<LoginPage> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                    Text(
-                      AppLocalizations.of(context)!.login,
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 24),
-                    TextFormField(
-                      controller: _apiBaseUrlController,
-                      decoration: InputDecoration(
-                        labelText: AppLocalizations.of(context)!.apiBaseUrl,
-                        prefixIcon: const Icon(Icons.cloud_outlined),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      keyboardType: TextInputType.url,
-                      textInputAction: TextInputAction.next,
-                      validator: (v) => v == null || v.isEmpty ? AppLocalizations.of(context)!.enterApiEndpoint : null,
-                      onChanged: (value) async {
-                        await setApiBaseUrl(value.trim());
-                        if (widget.onApiBaseUrlChanged != null) {
-                          widget.onApiBaseUrlChanged!(value.trim());
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _emailController,
-                      decoration: InputDecoration(
-                        labelText: AppLocalizations.of(context)!.emailAddress,
-                        prefixIcon: const Icon(Icons.email_outlined),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      validator: (v) {
-                        if (v == null || v.isEmpty) {
-                          return AppLocalizations.of(context)!.enterEmailAddress;
-                        }
-                        if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(v)) {
-                          return AppLocalizations.of(context)!.enterValidEmail;
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _passwordController,
-                      decoration: InputDecoration(
-                        labelText: AppLocalizations.of(context)!.password,
-                        prefixIcon: const Icon(Icons.lock_outlined),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        suffixIcon: IconButton(
-                          icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility),
-                          onPressed: () => setState(() => _showPassword = !_showPassword),
-                        ),
-                      ),
-                      obscureText: !_showPassword,
-                      textInputAction: TextInputAction.done,
-                      validator: (v) => v == null || v.isEmpty ? AppLocalizations.of(context)!.enterPassword : null,
-                      onFieldSubmitted: (_) {
-                        if (!_isLoading && _formKey.currentState!.validate()) {
-                          _performLogin();
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        onPressed: _isLoading ? null : _performLogin,
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                          const Text(
+                            'Anmelden',
+                            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                            textAlign: TextAlign.center,
                           ),
-                        ),
-                        child: _isLoading
-                            ? const SizedBox(
-                                width: 20, 
-                                height: 20, 
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : Text(AppLocalizations.of(context)!.login),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        const Expanded(child: Divider()),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                          child: Text(localizations.or),
-                        ),
-                        const Expanded(child: Divider()),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _isLoading ? null : () async {
-                          logDebug('Microsoft sign-in button pressed', source: 'LoginPage');
-
-                          // Navigate to Microsoft auth page
-                          final result = await Navigator.of(context).push<bool>(
-                            MaterialPageRoute(
-                              builder: (context) => MicrosoftAuthPage(
-                                apiBaseUrl: _apiBaseUrlController.text.trim(),
-                                existingUserEmail: null, // New account
-                                onAuthSuccess: (token, refreshToken, email) async {
-                                  logDebug('Microsoft auth successful', source: 'LoginPage');
-                                  logDebug('Received token: $token', source: 'LoginPage');
-                                  logDebug('Received refresh token: $refreshToken', source: 'LoginPage');
-
-                                  // Store the tokens and update the app state
-                                  final apiStore = Provider.of<ApiStore>(context, listen: false);
-
-                                  // Store the API base URL
-                                  if (widget.onApiBaseUrlChanged != null) {
-                                    widget.onApiBaseUrlChanged!(_apiBaseUrlController.text.trim());
-                                  }
-
-                                  // Add the Microsoft user with tokens
-                                  await apiStore.addMicrosoftUser(token, refreshToken);
-
-                                  // Fetch user data
-                                  await apiStore.fetchAll();
-                                },
+                          const SizedBox(height: 8),
+                          Text(
+                            'Verbindet dieses Gerät direkt mit dem Schulnetz deiner '
+                            'Schule - kein Schuly-Server dazwischen.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 24),
+                          TextFormField(
+                            controller: _schulnetzUrlController,
+                            decoration: InputDecoration(
+                              labelText: 'Schulnetz-URL',
+                              hintText: 'https://schulnetz.beispielschule.ch',
+                              prefixIcon: const Icon(Icons.school_outlined),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
                               ),
                             ),
-                          );
-
-                          if (result == true && mounted) {
-                            logDebug('Microsoft authentication completed successfully', source: 'LoginPage');
-                            // Authentication successful - navigation handled by main app
-                          }
-                        },
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            keyboardType: TextInputType.url,
+                            textInputAction: TextInputAction.done,
+                            validator: (v) => v == null || v.trim().isEmpty
+                                ? 'Bitte Schulnetz-URL eingeben'
+                                : null,
+                            onFieldSubmitted: (_) {
+                              if (!_isLoading) _signInWithMicrosoft();
+                            },
                           ),
-                        ),
-                        icon: Image.network(
-                          'https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg',
-                          width: 20,
-                          height: 20,
-                          errorBuilder: (context, error, stackTrace) => const Icon(Icons.business, size: 20),
-                        ),
-                        label: Text(localizations.signInWithMicrosoft),
-                      ),
-                    ),
-                  ],
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: _isLoading ? null : _signInWithMicrosoft,
+                              style: FilledButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              icon: _isLoading
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : Image.network(
+                                      'https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg',
+                                      width: 20,
+                                      height: 20,
+                                      errorBuilder: (context, error, stackTrace) =>
+                                          const Icon(Icons.business, size: 20),
+                                    ),
+                              label: const Text('Mit Microsoft anmelden'),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),

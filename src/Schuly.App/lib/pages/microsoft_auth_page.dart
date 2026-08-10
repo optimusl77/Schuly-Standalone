@@ -2,11 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 // ignore: depend_on_referenced_packages
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
-import 'package:schuly/api/lib/api.dart';
-import 'package:sentry_flutter/sentry_flutter.dart';
 import '../l10n/app_localizations.dart';
+import '../services/local_schulnetz_auth.dart';
 import '../utils/logger.dart';
 
+/// Drives Schulnetz's Microsoft/Entra login directly against the school's own
+/// Schulnetz instance - no Schuly/SchulwareAPI backend involved at any step.
+/// [apiBaseUrl] is the school's Schulnetz base URL (e.g.
+/// `https://schulnetz.bbbaden.ch`); the name is kept as-is so every existing
+/// call site (which already passes the app-wide `apiBaseUrl`) needs no change.
+///
+/// PKCE is generated on-device ([LocalSchulnetzAuth]) and the resulting
+/// `authorize.php` URL is loaded directly in this WebView - a real browser
+/// engine, so it passes Microsoft's anti-bot challenge and any MFA prompt for
+/// free. The redirect chain can pass through an intermediate
+/// `authorize.php?code=..&state=..` hop carrying Microsoft's own code and an
+/// opaque Schulnetz-generated composite state; that must be left to navigate
+/// through untouched (grabbing it produces `invalid_grant`). Only the final
+/// hop - wherever it lands, typically `schulnetz.web.app/callback` - whose
+/// `state` matches the one generated for this attempt is intercepted.
 class MicrosoftAuthPage extends StatefulWidget {
   final String apiBaseUrl;
   final String? existingUserEmail; // For re-authentication
@@ -25,10 +39,12 @@ class MicrosoftAuthPage extends StatefulWidget {
 
 class _MicrosoftAuthPageState extends State<MicrosoftAuthPage> {
   WebViewController? _controller;
-  String? _codeVerifier;
-  String? _authUrl;
+  late final String _codeVerifier;
+  late final String _expectedState;
+  late final String _authUrl;
   bool _isLoading = true;
   bool _isWebViewReady = false;
+  bool _done = false;
   String _statusMessage = 'Initializing Microsoft authentication...';
 
   @override
@@ -37,67 +53,35 @@ class _MicrosoftAuthPageState extends State<MicrosoftAuthPage> {
     _initializeAuth();
   }
 
-
   Future<void> _initializeAuth() async {
-    final transaction = Sentry.startTransaction(
-      'authenticate.microsoft.init',
-      'http.client',
-    );
-    transaction.setData('description', 'Initialize Microsoft OAuth');
-
     try {
-      setState(() {
-        _statusMessage = 'Fetching Microsoft OAuth URL...';
-      });
-
-      final apiClient = ApiClient(basePath: widget.apiBaseUrl);
-      final authApi = AuthApi(apiClient);
-
-      logDebug('Calling authenticateOauthMobileUrl endpoint', source: 'MicrosoftAuthPage');
-
-      final oauthSpan = transaction.startChild(
-        'oauth.get_url',
-        description: 'Get OAuth URL from server',
+      final pkce = LocalSchulnetzAuth.generatePkce();
+      _codeVerifier = pkce.verifier;
+      _expectedState = LocalSchulnetzAuth.randomToken();
+      _authUrl = LocalSchulnetzAuth.buildAuthorizeUrl(
+        baseUrl: widget.apiBaseUrl,
+        codeChallenge: pkce.challenge,
+        state: _expectedState,
+        nonce: LocalSchulnetzAuth.randomToken(),
       );
-      final response = await authApi.authenticateOauthMobileUrl();
-      await oauthSpan.finish();
 
-      if (response == null) {
-        throw Exception('Failed to get OAuth URL from server');
-      }
-
-      // Extract the authorization URL and code verifier from response
-      _authUrl = response.authorizationUrl;
-      _codeVerifier = response.codeVerifier;
-
-      logInfo('Received OAuth URL and code verifier', source: 'MicrosoftAuthPage');
+      logInfo('Generated local OAuth URL and code verifier', source: 'MicrosoftAuthPage');
       logDebug('OAuth URL: $_authUrl', source: 'MicrosoftAuthPage');
 
-      setState(() {
-        _statusMessage = 'Preparing fresh browser session...';
-      });
+      if (widget.existingUserEmail != null) {
+        logInfo('Re-authentication for user: ${widget.existingUserEmail}', source: 'MicrosoftAuthPage');
+      }
 
-      // Initialize WebView with fresh session
-      final webViewSpan = transaction.startChild(
-        'webview.init',
-        description: 'Initialize WebView',
-      );
       await _initializeWebView();
-      await webViewSpan.finish();
 
-      // Mark WebView as ready and update UI
       if (mounted) {
         setState(() {
           _statusMessage = 'Loading Microsoft login page...';
           _isWebViewReady = true;
-          _isLoading = false; // Hide loading overlay to show WebView
+          _isLoading = false;
         });
       }
-
-      transaction.status = const SpanStatus.ok();
     } catch (e) {
-      transaction.status = const SpanStatus.internalError();
-      transaction.throwable = e;
       logError('Failed to initialize OAuth', source: 'MicrosoftAuthPage', error: e);
       setState(() {
         _isLoading = false;
@@ -112,21 +96,14 @@ class _MicrosoftAuthPageState extends State<MicrosoftAuthPage> {
           ),
         );
       }
-    } finally {
-      await transaction.finish();
     }
   }
 
   Future<void> _initializeWebView() async {
-    // Don't clear cookies - keep the WebView session persistent
-    // This allows users to stay logged in to Microsoft
+    // Don't clear cookies - keep the WebView session persistent so a later
+    // silent refresh (or re-auth) can reuse Microsoft's own session cookie.
     logDebug('Using shared WebView session', source: 'MicrosoftAuthPage');
 
-    if (widget.existingUserEmail != null) {
-      logInfo('Re-authentication for user: ${widget.existingUserEmail}', source: 'MicrosoftAuthPage');
-    }
-
-    // Create platform-specific parameters for better isolation
     late final PlatformWebViewControllerCreationParams params;
     if (WebViewPlatform.instance is WebKitWebViewPlatform) {
       params = WebKitWebViewControllerCreationParams(
@@ -137,20 +114,16 @@ class _MicrosoftAuthPageState extends State<MicrosoftAuthPage> {
       params = const PlatformWebViewControllerCreationParams();
     }
 
-    // Create a new WebView controller with fresh instance
     _controller = WebViewController.fromPlatformCreationParams(params)
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setUserAgent('Schuly Mobile App ${DateTime.now().millisecondsSinceEpoch}') // Unique user agent per session
-      ..enableZoom(false) // Disable zoom for cleaner UI
+      ..enableZoom(false)
       ..setBackgroundColor(Colors.white)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (String url) {
             logDebug('Page started loading: $url', source: 'MicrosoftAuthPage');
             if (mounted) {
-              setState(() {
-                _statusMessage = 'Loading Microsoft login...';
-              });
+              setState(() => _statusMessage = 'Loading Microsoft login...');
             }
           },
           onPageFinished: (String url) {
@@ -162,68 +135,40 @@ class _MicrosoftAuthPageState extends State<MicrosoftAuthPage> {
               });
             }
           },
-          onNavigationRequest: (NavigationRequest request) {
-            logDebug('Navigation request to: ${request.url}', source: 'MicrosoftAuthPage');
-
-            // Check for redirect with authorization code
-            final uri = Uri.parse(request.url);
-
-            // Check if this is a redirect (302) with callback URL
-            if (request.url.contains('/callback?code=') ||
-                request.url.contains('schulnetz.web.app/callback')) {
-
-              logInfo('Detected callback URL with authorization code', source: 'MicrosoftAuthPage');
-
-              // Extract code and state from URL
-              final code = uri.queryParameters['code'];
-              final state = uri.queryParameters['state'];
-
-              logDebug('Extracted code: ${code?.substring(0, 10)}...', source: 'MicrosoftAuthPage');
-              logDebug('State: $state', source: 'MicrosoftAuthPage');
-
-              if (code != null) {
-                // Don't navigate to the callback URL
-                _handleAuthorizationCode(code, state);
-                return NavigationDecision.prevent;
-              }
-            }
-
-            return NavigationDecision.navigate;
-          },
+          onNavigationRequest: _onNavigationRequest,
           onWebResourceError: (WebResourceError error) {
             logError('WebView error: ${error.description}', source: 'MicrosoftAuthPage');
             if (mounted) {
-              setState(() {
-                _statusMessage = 'Error: ${error.description}';
-              });
-            }
-          },
-          onHttpError: (HttpResponseError error) {
-            logWarning('HTTP error: ${error.response?.statusCode}', source: 'MicrosoftAuthPage');
-            if (error.response?.statusCode == 302) {
-              logDebug('302 redirect detected', source: 'MicrosoftAuthPage');
-              // The navigation delegate should handle this
+              setState(() => _statusMessage = 'Error: ${error.description}');
             }
           },
         ),
-      );
-
-    if (_authUrl != null) {
-      logDebug('Loading OAuth URL in WebView', source: 'MicrosoftAuthPage');
-      _controller?.loadRequest(Uri.parse(_authUrl!));
-    }
+      )
+      ..loadRequest(Uri.parse(_authUrl));
   }
 
-  // No need to save cookies - WebView maintains its own session
+  /// Only intercepts the hop whose `state` matches [_expectedState] exactly -
+  /// deliberately host/path-agnostic (see class doc): the real final callback
+  /// doesn't necessarily land back on the school's own Schulnetz domain, and
+  /// an intermediate hop can carry a similarly `code=..&state=..`-shaped URL
+  /// that must be left to navigate through untouched.
+  NavigationDecision _onNavigationRequest(NavigationRequest request) {
+    logDebug('Navigation request to: ${request.url}', source: 'MicrosoftAuthPage');
+    final uri = Uri.tryParse(request.url);
+    final code = uri?.queryParameters['code'];
+    final state = uri?.queryParameters['state'];
+    if (code != null && state == _expectedState) {
+      logInfo('Matched final callback with authorization code', source: 'MicrosoftAuthPage');
+      _handleAuthorizationCode(code);
+      return NavigationDecision.prevent;
+    }
+    return NavigationDecision.navigate;
+  }
 
-  Future<void> _handleAuthorizationCode(String code, String? state) async {
+  Future<void> _handleAuthorizationCode(String code) async {
+    if (_done) return;
+    _done = true;
     logInfo('Handling authorization code', source: 'MicrosoftAuthPage');
-
-    final transaction = Sentry.startTransaction(
-      'authenticate.microsoft.callback',
-      'http.client',
-    );
-    transaction.setData('description', 'Microsoft OAuth callback');
 
     setState(() {
       _isLoading = true;
@@ -231,55 +176,23 @@ class _MicrosoftAuthPageState extends State<MicrosoftAuthPage> {
     });
 
     try {
-      // Call the callback endpoint with the code and verifier
-      final apiClient = ApiClient(basePath: widget.apiBaseUrl);
-      final authApi = AuthApi(apiClient);
-
-      final callbackRequest = MobileCallbackRequestDto(
+      final result = await LocalSchulnetzAuth.exchangeCode(
+        baseUrl: widget.apiBaseUrl,
         code: code,
-        codeVerifier: _codeVerifier!,
-        state: state,
+        codeVerifier: _codeVerifier,
       );
 
-      logDebug('Calling authenticateOauthMobileCallback', source: 'MicrosoftAuthPage');
-      logDebug('Code verifier length: ${_codeVerifier?.length}', source: 'MicrosoftAuthPage');
-
-      final callbackSpan = transaction.startChild(
-        'oauth.exchange_code',
-        description: 'Exchange authorization code for tokens',
-      );
-      final response = await authApi.authenticateOauthMobileCallback(callbackRequest);
-      await callbackSpan.finish();
-
-      if (response != null) {
+      if (result.success && result.accessToken != null) {
         logInfo('Authentication successful', source: 'MicrosoftAuthPage');
-        logDebug('Received access and refresh tokens', source: 'MicrosoftAuthPage');
-
-        // Get user email - use existing or will be determined by parent
-        String userEmail = widget.existingUserEmail ?? '';
-
-        // For new users, we need to get the email from the token/API
-        // The parent will handle this, but we need to save cookies after
-        // So we'll save cookies after calling onAuthSuccess
-
-        // Call success callback with email
-        widget.onAuthSuccess(response.accessToken, response.refreshToken, userEmail);
-
-        // Close the WebView page
-        if (mounted) {
-          Navigator.of(context).pop(true);
-        }
-
-        transaction.status = const SpanStatus.ok();
+        final userEmail = widget.existingUserEmail ?? '';
+        widget.onAuthSuccess(result.accessToken!, result.refreshToken ?? '', userEmail);
+        if (mounted) Navigator.of(context).pop(true);
       } else {
-        throw Exception('No response from authentication callback');
+        throw Exception(result.message ?? 'No access token in response');
       }
-
     } catch (e) {
-      transaction.status = const SpanStatus.internalError();
-      transaction.throwable = e;
-
       logError('Failed to complete OAuth callback', source: 'MicrosoftAuthPage', error: e);
+      _done = false;
 
       if (mounted) {
         setState(() {
@@ -294,8 +207,6 @@ class _MicrosoftAuthPageState extends State<MicrosoftAuthPage> {
           ),
         );
       }
-    } finally {
-      await transaction.finish();
     }
   }
 

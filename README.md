@@ -1,22 +1,31 @@
-# <p align="center">Schuly</p>
+# <p align="center">Schuly Standalone</p>
 <p align="center">
   <img src="./assets/app_icon.png" width="200" alt="Schuly Logo">
 </p>
 <p align="center">
-  <strong>Schuly, the better Schulnetz app</strong>
+  <strong>Schuly, running fully on-device - no backend server required</strong>
 </p>
 <p align="center">
-  <a href="https://github.com/PianoNic/schuly/stargazers"><img src="https://img.shields.io/github/stars/PianoNic/schuly?style=flat&color=3da8ff" alt="GitHub stars"/></a>
-  <a href="https://github.com/PianoNic/schuly"><img src="https://badgetrack.pianonic.ch/badge?tag=schuly&label=visits&color=3da8ff&style=flat" alt="visits"/></a>
-  <a href="https://github.com/PianoNic/schuly/blob/main/LICENSE"><img src="https://img.shields.io/github/license/PianoNic/schuly?color=3da8ff" alt="License"/></a>
-  <a href="https://github.com/PianoNic/schuly/releases"><img src="https://img.shields.io/github/v/release/PianoNic/schuly?include_prereleases&color=3da8ff&label=Latest%20Release" alt="Latest Release"/></a>
-  <a href="#installation"><img src="https://img.shields.io/badge/Selfhost-Instructions-3da8ff.svg" alt="Installation"/></a>
+  <a href="https://github.com/schulydev/Schuly/blob/main/LICENSE"><img src="https://img.shields.io/github/license/schulydev/Schuly?color=3da8ff" alt="License"/></a>
+  <a href="#installation"><img src="https://img.shields.io/badge/Selfhost-Not%20needed-3da8ff.svg" alt="No backend needed"/></a>
 </p>
 
-A modern mobile app that provides a superior alternative to the official Schulnetz client. Features an intuitive interface, multi-user support, and seamless access to grades, schedules, and student information. Connects to **[SchulwareAPI](https://github.com/PianoNic/SchulwareAPI)** for reliable data access across different Schulnetz systems.
+This is a fork of **[schulydev/Schuly](https://github.com/schulydev/Schuly)**, a mobile app that provides a superior alternative to the official Schulnetz client. All credit for the original app, its design, and its feature set goes to the upstream project and its maintainer, **[PianoNic](https://github.com/PianoNic)**.
 
 > [!IMPORTANT]
-> This project is **NOT** affiliated with, endorsed by, or connected to Schulnetz or Centerboard AG in any way. This is an independent, unofficial API wrapper that provides a unified interface to interact with their existing systems.
+> This project is **NOT** affiliated with, endorsed by, or connected to Schulnetz, Centerboard AG, schulydev, or PianoNic. It's an independent, unofficial fork. Like the upstream project, it is an unofficial client that talks to Schulnetz's own systems on your behalf.
+
+## What's different in this fork
+
+Upstream Schuly (in the version this fork is based on, `v2.7.0`) talks to Schulnetz through a hosted or self-hosted **[SchulwareAPI](https://github.com/PianoNic/SchulwareAPI)** backend, which proxies authentication and data requests. That backend is what makes the "superior alternative" experience possible (unified login, Microsoft/Entra SSO support, a clean REST API over Schulnetz's own quirks) - but it also means a server is a required, always-on part of the chain, and it's a dependency this fork does not need or want.
+
+This fork removes that dependency entirely for schools using **Microsoft/Entra SSO**:
+
+- **Login talks directly to your school's own Schulnetz instance.** The Microsoft sign-in step happens in an embedded, on-device WebView (a real browser, so it passes Microsoft's normal sign-in and MFA prompts natively) instead of being brokered by a server. PKCE and the token exchange are done entirely on-device, straight against Schulnetz's own `/authorize.php` and `/token.php`.
+- **Every data request goes straight to Schulnetz's REST API** (`{your-school}/rest/v1/...`) with the token from that login - grades, exams, absences, agenda, notifications, settings, lateness, and the student ID card. No proxy, no intermediate server, no SchulwareAPI URL to configure.
+- **The old email/password and "API Base URL" login path is gone.** It routed through the same backend, so it doesn't fit a backend-free fork. Only school URL + Microsoft sign-in remains.
+
+Everything else - the UI, the multi-account switching, the theming, the feature set - is unchanged from upstream `v2.7.0`.
 
 ## Screenshots
 
@@ -30,31 +39,34 @@ A modern mobile app that provides a superior alternative to the official Schulne
 
 ## Features
 
-- Grades, agenda, absences, student ID
+- Grades, agenda, absences, student ID card
 - Multi-user account switching
 - Material 3 theming with dark/light mode
 - Tons of customization options
 - Push notifications
-- Android, iOS, and Web support
-- Error tracking with GlitchTip (automatic in release builds)
+- Android and iOS support
+- No backend server anywhere in the loop - the app is the whole client
 
 ## Installation
 
-Download from **[Releases](https://github.com/PianoNic/schuly/releases)**:
-- **Android**: `.apk` file
-- **iOS**: `.ipa` file (sideloading required)
+Build it yourself with Flutter (see `src/Schuly.App`), or grab an APK/IPA if one has been shared with you. There are no upstream release binaries for this fork.
 
 ## Configuration
 
 1. Open the app
-2. Go to Account settings
-3. Configure SchulwareAPI URL (or use default)
-4. Login with Schulnetz credentials
+2. Enter your school's Schulnetz URL (e.g. `https://schulnetz.yourschool.ch`)
+3. Sign in with Microsoft
 
-Requires **[SchulwareAPI](https://github.com/PianoNic/SchulwareAPI)** backend (hosted or self-hosted).
+That's it - no server URL, no separate account to configure.
+
+## Credits
+
+- **[schulydev/Schuly](https://github.com/schulydev/Schuly)** and **[PianoNic](https://github.com/PianoNic)** - the original app this is forked from, and all of its design and functionality.
+- **[SchulwareAPI](https://github.com/PianoNic/SchulwareAPI)** by PianoNic - reverse-engineering its (open-source) proxy logic is what made a direct, backend-free connection to Schulnetz possible in this fork.
+- **[Entrance](https://github.com/PianoNic/Entrance)** (`ms-entrance`) by PianoNic - its login flow documented the Microsoft/Entra + Schulnetz OAuth handshake this fork replicates on-device via WebView instead of headless HTTP.
 
 ---
-<p align="center">Made with ❤️ by <a href="https://github.com/Pianonic">Pianonic</a></p>
+<p align="center">Original app made with ❤️ by <a href="https://github.com/Pianonic">PianoNic</a></p>
 <p align="center">
   <a href="https://buymeacoffee.com/pianonic"><img src="https://img.shields.io/badge/-buy_me_a%C2%A0coffee-gray?logo=buy-me-a-coffee" alt="Buy Me A Coffee"/></a>
 </p>

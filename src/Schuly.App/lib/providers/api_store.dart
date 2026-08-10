@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:schuly/api/lib/api.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -145,54 +146,36 @@ class ApiStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Check if API endpoint is reachable
+  // Check if the school's own Schulnetz instance is reachable. There's no
+  // Schuly/SchulwareAPI backend anymore to ask for an app-info style
+  // heartbeat, so this just probes Schulnetz's own root - any HTTP response
+  // (even a redirect) means the network path to the school works. `appInfo`
+  // (backend version/environment, shown in Settings) has no local equivalent
+  // and stays unset.
   Future<bool> _checkApiConnectivity() async {
     try {
-      // Try to fetch app info with a short timeout
-      logDebug('Checking API connectivity by fetching app info', source: 'ApiStore');
-
-      final appApi = AppApi(defaultApiClient);
-
-      // Try to get app info with a 5 second timeout
-      final response = await appApi.appAppInfoWithHttpInfo().timeout(
-        const Duration(seconds: 5),
-        onTimeout: () {
-          logWarning('API connectivity check timed out after 5 seconds', source: 'ApiStore');
-          throw TimeoutException('API connectivity check timed out');
-        },
-      );
-
-      // Consider API reachable if we get a successful response
-      final isReachable = response.statusCode >= 200 && response.statusCode < 300;
-      logDebug('API connectivity check result: $isReachable (status: ${response.statusCode})', source: 'ApiStore');
-
-      // If reachable and successful, also cache the app info
-      if (isReachable && response.body.isNotEmpty && response.statusCode != 204) {
-        try {
-          final appInfoDto = await defaultApiClient.deserializeAsync(
-            response.body,
-            'AppInfoDto',
-          ) as AppInfoDto?;
-
-          if (appInfoDto != null) {
-            // Store the app info
-            appInfo = {
-              'version': appInfoDto.version,
-              'environment': appInfoDto.environment,
-            };
-
-            // Cache it
-            await _cacheAppInfo(appInfo!);
-            notifyListeners();
-          }
-        } catch (e) {
-          logDebug('Failed to parse app info during connectivity check', source: 'ApiStore');
-        }
-      }
-
+      logDebug('Checking Schulnetz connectivity', source: 'ApiStore');
+      final dio = Dio();
+      final response = await dio
+          .get<void>(
+            defaultApiClient.basePath,
+            options: Options(
+              validateStatus: (_) => true,
+              followRedirects: true,
+            ),
+          )
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              logWarning('Schulnetz connectivity check timed out after 5 seconds', source: 'ApiStore');
+              throw TimeoutException('Schulnetz connectivity check timed out');
+            },
+          );
+      final isReachable = response.statusCode != null;
+      logDebug('Schulnetz connectivity check result: $isReachable (status: ${response.statusCode})', source: 'ApiStore');
       return isReachable;
     } catch (e) {
-      logWarning('API connectivity check failed: $e', source: 'ApiStore');
+      logWarning('Schulnetz connectivity check failed: $e', source: 'ApiStore');
       return false;
     }
   }
@@ -545,14 +528,6 @@ class ApiStore extends ChangeNotifier {
   Future<void> _cacheSettings(List<SettingDto> data) async {
     final jsonList = data.map((item) => item.toJson()).toList();
     await StorageService.cacheData('settings_${_activeUserEmail ?? 'default'}', jsonList);
-  }
-
-  Future<void> _cacheAppInfo(Map<String, dynamic> data) async {
-    const cacheKey = 'cache_appInfo';
-    const timestampKey = 'cache_timestamp_appInfo';
-
-    await StorageService.setString(cacheKey, jsonEncode(data));
-    await StorageService.setString(timestampKey, DateTime.now().millisecondsSinceEpoch.toString());
   }
 
   Future<void> _cacheAbsenceNotices(List<Object> data) async {
@@ -1114,69 +1089,16 @@ class ApiStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  // There's no Schuly/SchulwareAPI backend anymore to report an app
+  // version/environment - only whatever was cached from a much older build
+  // (if any) is shown; nothing to fetch over the network.
   Future<void> fetchAppInfo({bool forceRefresh = false}) async {
-    // Try to load from cache first if not forcing refresh
-    if (!forceRefresh) {
-      final cachedData = await _loadCachedAppInfo();
-      if (cachedData != null) {
-        appInfo = cachedData;
-        lastApiError = null;
-        notifyListeners();
-        return;
-      }
-      // If no cached data and not forcing refresh, don't try to fetch from API
-      // This prevents blocking when loading cache during offline mode
-      if (_isOfflineMode) {
-        notifyListeners();
-        return;
-      }
+    if (appInfo != null) return;
+    final cachedData = await _loadCachedAppInfo();
+    if (cachedData != null) {
+      appInfo = cachedData;
+      notifyListeners();
     }
-
-    try {
-      final appApi = AppApi();
-      // Get the raw HTTP response instead of trying to deserialize
-      final httpResponse = await appApi.appAppInfoWithHttpInfo().timeout(
-        const Duration(seconds: 2),
-        onTimeout: () {
-          throw TimeoutException('App info fetch timed out');
-        },
-      );
-
-      if (httpResponse.statusCode == 200) {
-        // Manually parse the JSON response
-        final responseBody = httpResponse.body;
-        if (responseBody.isNotEmpty) {
-          final jsonData = jsonDecode(responseBody);
-          if (jsonData is Map<String, dynamic>) {
-            appInfo = jsonData;
-            await _cacheAppInfo(appInfo!);
-          } else {
-            appInfo = {'raw': jsonData.toString()};
-            await _cacheAppInfo(appInfo!);
-          }
-        }
-      }
-      lastApiError = null;
-    } on ApiException catch (e) {
-      _handleApiError(e);
-      // If API fails and we don't have fresh data, try to load from cache as fallback
-      if (appInfo == null) {
-        final cachedData = await _loadCachedAppInfo();
-        if (cachedData != null) {
-          appInfo = cachedData;
-        }
-      }
-    } catch (e) {
-      lastApiError = e.toString();
-      // If API fails and we don't have fresh data, try to load from cache as fallback
-      if (appInfo == null) {
-        final cachedData = await _loadCachedAppInfo();
-        if (cachedData != null) {
-          appInfo = cachedData;
-        }
-      }
-    }
-    notifyListeners();
   }
 
   // Refresh all data (for pull-to-refresh)
