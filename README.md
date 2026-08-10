@@ -6,7 +6,6 @@
   <strong>Schuly, running fully on-device - no backend server required</strong>
 </p>
 <p align="center">
-  <a href="https://github.com/schulydev/Schuly/blob/main/LICENSE"><img src="https://img.shields.io/github/license/schulydev/Schuly?color=3da8ff" alt="License"/></a>
   <a href="#installation"><img src="https://img.shields.io/badge/Selfhost-Not%20needed-3da8ff.svg" alt="No backend needed"/></a>
 </p>
 
