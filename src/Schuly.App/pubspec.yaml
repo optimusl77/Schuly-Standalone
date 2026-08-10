@@ -72,7 +72,14 @@ flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/app_icon.png"
-  
+  # The source icon is a single flat image with its own black background
+  # baked in (no separate foreground/background layers) - without this,
+  # flutter_launcher_icons auto-derives a thin outline-only adaptive
+  # foreground and leaves the old blue adaptive background in place,
+  # producing a mismatched Android adaptive icon.
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "assets/app_icon.png"
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 

@@ -38,7 +38,9 @@ import 'l10n/maggus_material_localizations.dart';
 import 'l10n/maggus_cupertino_localizations.dart';
 import 'utils/logger.dart';
  
-String apiBaseUrl = 'https://schlwr.pianonic.ch';
+// Default Schulnetz instance the login screen pre-fills - the school this
+// fork was built and tested against. Users can change it before signing in.
+String apiBaseUrl = 'https://schulnetz.bbbaden.ch';
 
 Future<void> loadApiBaseUrl() async {
   final storedUrl = await StorageService.getApiUrl();

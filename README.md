@@ -54,7 +54,7 @@ Build it yourself with Flutter (see `src/Schuly.App`), or grab an APK/IPA if one
 ## Configuration
 
 1. Open the app
-2. Enter your school's Schulnetz URL (e.g. `https://schulnetz.yourschool.ch`)
+2. Enter your school's Schulnetz URL (pre-filled with `https://schulnetz.bbbaden.ch` - change it to your own school's URL)
 3. Sign in with Microsoft
 
 That's it - no server URL, no separate account to configure.
