@@ -1,6 +1,6 @@
 # <p align="center">Schuly Standalone</p>
 <p align="center">
-  <img src="./assets/app_icon.png" width="200" alt="Schuly Logo">
+  <img src="./assets/logo.png" width="200" alt="Schuly Standalone Logo">
 </p>
 <p align="center">
   <strong>Schuly, running fully on-device - no backend server required</strong>
